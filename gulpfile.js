@@ -4,53 +4,129 @@ import sassPkg from 'sass';
 import gulpSass from 'gulp-sass';
 import gulpCssimport from 'gulp-cssimport';
 import del from 'del';
+import htmlmin from 'gulp-htmlmin';
+import cleanCSS from 'gulp-clean-css';
+import terser from 'gulp-terser';
+import concat from 'gulp-concat';
+import soursemaps from 'gulp-sourcemaps';
+import gulpImg from 'gulp-image';
+import gulpWebp from 'gulp-webp';
+import gulpAvif from 'gulp-avif';
+import { stream as critical } from 'critical';
+import gulpif from 'gulp-if';
 
-const prepros = false;
+const prepros = true;
+
+let dev = false;
 
 const sass = gulpSass(sassPkg);
+
+const allJS = [
+	'src/libs/jquery-3.6.0.min.js',
+	'src/libs/swiper-bundle.min.js',
+];
 
 //задачи
 
 export const html = () => gulp
 	.src('src/*.html')
+	.pipe(htmlmin({
+		removeComments: true,
+		collapseWhitespace: true,
+	}))
 	.pipe(gulp.dest('dist'))
 	.pipe(browserSync.stream());
-
-// export const style = () => gulp
-// 	.src('src/style/style.css')
-// 	.pipe(gulpCssimport({
-// 		extensions: ['css'],
-// 	}))
-// 	.pipe(gulp.dest('dist/style'))
-// 	.pipe(browserSync.stream());
 
 export const scss = () => {
 	if(prepros) {
 		return gulp
 			.src('src/scss/**/*.scss')
+			.pipe(gulpif(dev, soursemaps.init()))
 			.pipe(sass().on('error', sass.logError))
-			.pipe(gulp.dest('dist/style'))
+			.pipe(cleanCSS({
+				2: {
+					specialComments: 0,
+				}
+			}))
+			.pipe(gulpif(dev, soursemaps.write('../maps')))
+			.pipe(gulp.dest('dist/css'))
 			.pipe(browserSync.stream());
 	}
 	return gulp
-		.src('src/style/style.css')
+		.src('src/css/index.css')
+		.pipe(gulpif(dev, soursemaps.init()))
 		.pipe(gulpCssimport({
 			extensions: ['css'],
 		}))
-		.pipe(gulp.dest('dist/style'))
+		.pipe(cleanCSS({
+			2: {
+				specialComments: 0,
+			}
+		}))
+		.pipe(gulpif(dev, soursemaps.write('../maps')))
+		.pipe(gulp.dest('dist/css'))
 		.pipe(browserSync.stream());
 }
 
 export const js = () => gulp
-	.src('src/js/**/*.js')
+	.src([...allJS, 'src/js/**/*.js'])
+	.pipe(gulpif(dev, soursemaps.init()))
+	.pipe(terser())
+	.pipe(concat('index.min.js'))
+	.pipe(gulpif(dev, soursemaps.write('../maps')))
 	.pipe(gulp.dest('dist/js'))
 	.pipe(browserSync.stream());
 
+export const img = () => gulp
+	.src('src/img/**/*.{jpg,jpeg,png,svg,gif}')
+	.pipe(gulpif(!dev, gulpImg({
+		optipng: ['-i 1', '-strip all', '-fix', '-o7', '-force'],
+		pngquant: ['--speed=1', '--force', 256],
+		zopflipng: ['-y', '--lossy_8bit', '--lossy_transparent'],
+		jpegRecompress: ['--strip', '--quality', 'medium', '--min', 40, '--max', 80],
+		mozjpeg: ['-optimize', '-progressive'],
+		gifsicle: ['--optimize'],
+		svgo: true,
+	})))
+	.pipe(gulp.dest('dist/img'))
+	.pipe(browserSync.stream({
+		once: true
+	}));
+
+export const webp = () => gulp
+	.src('src/img/**/*.{jpg,jpeg,png}')
+	.pipe(gulpWebp({
+		quality: 70
+	}))
+	.pipe(gulp.dest('dist/img'))
+	.pipe(browserSync.stream({
+		once: true
+	}));
+
+export const avif = () => gulp
+	.src('src/img/**/*.{jpg,jpeg,png}')
+	.pipe(gulpAvif({
+		quality: 70
+	}))
+	.pipe(gulp.dest('dist/img'))
+	.pipe(browserSync.stream({
+		once: true
+	}));
+
+export const critCSS = () => gulp
+	.src('dist/*.html')
+	.pipe(critical({
+		base: 'dist/',
+		inline: true,
+		css: ['dist/css/index.css']
+	}))
+	.on('error', err => {
+		console.error(err.message)
+	})
+	.pipe(gulp.dest('dist'))
+
 export const copy = () => gulp
-	.src([
-		'src/font/**/*',
-		'src/img/**/*'
-	], {
+	.src('src/font/**/*', {
 		base: 'src'
 	})
 	.pipe(gulp.dest('dist'))
@@ -69,14 +145,16 @@ export const server = () => {
 	})
 
 	gulp.watch('./src/**/*.html', html);
-	// gulp.watch('./src/style/**/*.css', style);
 	gulp.watch(
 		prepros ? 
 		'./src/scss/**/*.scss' : 
-		'./src/style/**/*.css', 
+		'./src/css/**/*.css', 
 		scss);
+	gulp.watch('src/img/**/*.{jpg,jpeg,png,svg,gif}', img);
 	gulp.watch('./src/js/**/*.js', js);
-	gulp.watch(['./src/img/**/*', './src/font/**/*'], copy);
+	gulp.watch('./src/font/**/*', copy);
+	gulp.watch('src/img/**/*.{jpg,jpeg,png}', webp);
+	gulp.watch('src/img/**/*.{jpg,jpeg,png}', avif);
 
 };
 
@@ -84,8 +162,12 @@ export const clear = () => del('dist/**/*', {forse: true,});
 
 
 //запуск
-export const base = gulp.parallel(html, scss, js, copy);
+export const develop = async() => {
+	dev = true;
+}
 
-export const build = gulp.series(clear, base);
+export const base = gulp.parallel(html, scss, js, img, avif, webp, copy);
 
-export default gulp.series(base, server);
+export const build = gulp.series(clear, base, critCSS)
+
+export default gulp.series(develop, base, server);
